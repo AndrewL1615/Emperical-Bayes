@@ -1,0 +1,124 @@
+---
+title: "2-Beta Distribution"
+author: "Andrew L"
+date: "11/29/2021"
+output: html_document
+---
+# Notes 
+
+* probability distribution with parameters _$\alpha$_ and $\beta%$
+* domain of beta distribution is $(0,1)$
+* represents a distribution of _probabilities_
+  + all possible values of probabilities when we don't know what that probability is
+* Bayesian statistics is a way of modeling prior expectations explicitly
+  
+## Batting Average Example
+
+### Updating
+
+* number of hits player gets out of his at-bats is a **binomial distribution**
+  + best way to represent the prior expectation with with beta distribution
+  + a prior is representing, before the batter takes his first swing, what we roughly expect his batting average to be
+* let's say we expect a player's season-long batting avg to be between .21 to .35
+  + can be represented with beta dist. with parameters $\alpha = 81$ and $\beta = 219$
+
+```{r, echo = F, include=FALSE, warning=F}
+library(ggplot2)
+library(dplyr)
+
+sim <- tibble(a = c(81, 82, 81 + 100),
+                  b = c(219, 219, 219 + 200)) %>%
+  group_by(a, b) %>%
+  do(data_frame(x = seq(0, .5, .001), y = dbeta(x, .$a, .$b))) %>%
+  mutate(Parameters = paste0("\u03B1 = ", a, ", \u03B2 = ", b)) %>%
+  ungroup() %>%
+  mutate(Parameters = factor(Parameters, levels = unique(Parameters)))
+```
+
+```{r, echo = F}
+sim %>%
+  filter(a == 81) %>%
+  ggplot(aes(x, y, color = Parameters)) +
+  geom_line() +
+  xlab("Batting average") +
+  ylab("Density of beta")
+```
+
+* x-axis represnts distribution of possible batting averages, and y-axis represents probaility density of the beta distribution
+* every time we get new info (player gets a hit or miss), we _update_ our probabilities (shift curve left or right)
+  + this is the basic Bayesian philosophy: start with a prior dist., see some evidence, then update __posterior__ dist.
+* the new beta dist. will be updated as such:
+
+$$ Beta(\alpha_{0} + hits, \beta_{0} + misses) $$
+where $\alpha_{0}$ and $\beta_{0}$ are parameters that we started with (81 and 219 respectively)
+
+```{r, echo = F}
+ggplot(sim, aes(x, y, color = Parameters)) +
+  geom_line() +
+  xlab("Batting average") +
+  ylab("Density of beta")
+```
+
+* we can see that a single hit ($\alpha_{0} + 1$) won't shift the curve much at all
+* a more drastic change would be Beta($\alpha_{0} + 100, \beta_{0} + 200$), indicated by the blue curve
+
+### Posterior Mean
+
+Expected value (mean) of beta distribution is:
+
+$$\frac{\alpha}{\alpha + \beta}$$
+
+So a player with 100 hits and 200 misses would have a expected value of the beta distribution:
+
+$$\frac{82 + 100}{82 + 100 + 219 + 200} = .303$$
+
+Note that it is lower than the raw estimate $\frac{100}{100+200} = .333$, but higher than the estimate we started with $\frac{81}{81+219} = .270$
+
+* this means that the expected value is a combination of our prior expectations and our estimates
+  + in other words, we're saying that we start off each palyer in the season with 81 hits and 219 misses on his record
+  
+### Conjugate Prior
+* Beta dist. is the __conjugate prior__ of the binomial
+
+Let's simulate 10 million players with $\beta(81,219)$ distribution, and from each of them, we give them 300 chances at-bat, how many of these players will get exactly 100 hits?:
+
+```{r}
+library(dplyr)
+num_trials <- 10e6
+simulations <- data_frame(
+true_average = rbeta(num_trials, 81, 219),
+hits = rbinom(num_trials, 300, true_average)
+)
+simulations
+
+hit_100 <- simulations %>%
+filter(hits == 100)
+
+hit_100
+```
+
+What is the distribution of batting avgs among these selected 100/300 players?:
+
+```{r, echo=F, message=F}
+dens <- function(x) dbeta(x, 81 + 100, 219 + 200)
+ggplot(hit_100, aes(true_average)) +
+  geom_histogram(aes(y = ..density..)) +
+  stat_function(color = "red", fun = dens) +
+  labs(x = "Batting average of players who got 100 H / 300 AB")
+```
+
+We can see that the distribution of players precisely matches our $\beta(81+100,219+200)$ posterior from the blue curve in the previous graph
+* Bayesian updating is essentially asking: "our of our prior, what kinds of players would end up with evidence like this?"
+
+What if player had gotten 60 hits or 80 hits instead of 100? We can plot it:
+
+```{r}
+simulations %>%
+filter(hits %in% c(60, 80, 100)) %>%
+ggplot(aes(true_average, color = factor(hits))) +
+geom_density() +
+labs(x = "True average of players with H hits / 300 at-bats",
+color = "H")
+```
+
+We can see that the shape of posteriors are similar
