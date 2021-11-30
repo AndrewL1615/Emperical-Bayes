@@ -1,0 +1,129 @@
+---
+title: "03 - Empirical Bayes Estimation"
+author: "Andrew L"
+date: "11/30/2021"
+output: html_document
+---
+
+* don't need to bring in prior expectations with large number of observations
+
+Using the Lahman baseball dataset, we will prepare a dataset of players' career averages including number of hits, at-bats, and batting avg:
+
+```{r, message=F, warning=F}
+library(dplyr)
+library(tidyr)
+library(Lahman)
+
+# Filter out pitchers
+career <- Batting %>%
+filter(AB > 0) %>%
+anti_join(Pitching, by = "playerID") %>%
+group_by(playerID) %>%
+summarize(H = sum(H), AB = sum(AB)) %>%
+mutate(average = H / AB)
+
+# Include names along with the player IDs
+career <- Master %>%
+tbl_df() %>%
+dplyr::select(playerID, nameFirst, nameLast) %>%
+unite(name, nameFirst, nameLast, sep = " ") %>%
+inner_join(career, by = "playerID") %>%
+dplyr::select(-playerID)
+
+career
+```
+
+# Estimating a prior from data
+
+* 1st step is to estimate a beta prior using data
+  + usually you decide on a prior ahead of time, but empirical Bayes you use data you have
+* Empirical Bayes is an __approximation__ to the more exact Bayesian methods
+
+Let's see the distribution of the players' batting avg, filtering out players with less than 500 at-bats:
+
+```{r, echo=F}
+library(ggplot2)
+
+career %>%
+  filter(AB >= 500) %>%
+  ggplot(aes(average)) +
+  geom_histogram(binwidth = .005)
+```
+
+Looks like a beta distribution would be a pretty good fit. We want to fit the following model:
+
+$$ X \sim {Beta(\alpha_{0},\beta_{0})}$$
+
+We need to pick the hyperparameters $\alpha_{0}$ and $\beta_{0}$ of our model. We can use the maximum likelihood to see which parameters would maximize the probability of generating the distribution we see
+
+```{r}
+library(stats4)
+
+career_filtered <- career %>%
+filter(AB > 500)
+
+# log-likelihood function
+ll <- function(alpha, beta) {
+x <- career_filtered$H
+total <- career_filtered$AB
+-sum(VGAM::dbetabinom.ab(x, total, alpha, beta, log = TRUE)) #MLE function
+}
+
+# maximum likelihood estimation
+m <- mle(ll, start = list(alpha = 1, beta = 10), method = "L-BFGS-B",
+lower = c(0.0001, .1))
+ab <- coef(m)
+alpha0 <- ab[1]
+beta0 <- ab[2]
+```
+
+Turns out $\alpha_{0} = 102$ and $\beta_{0} = 290$. Let's see if the curve fits the distribution:
+
+```{r, echo=F}
+career_filtered %>%
+  filter(AB > 500) %>%
+  ggplot() +
+  geom_histogram(aes(average, y = ..density..), binwidth = .005) +
+  stat_function(fun = function(x) dbeta(x, alpha0, beta0), color = "red",
+                size = 1) +
+  xlab("Batting average")
+```
+Looks like it fits pretty well!
+
+# Using that distribution as a prior for each individual estimate
+Now we can look at any individual to estimate their batting average for the rest of the season. Recall that we're trying to update our posterior dist.:
+
+$$ Beta(\alpha_{0} + hits, \beta_{0} + misses) $$
+and so to estimate any individual's batting average, we simply use the expected value of the new distribution:
+
+$$ \frac{hits + \alpha_{0}}{hits + \alpha_{0} + misses + \beta_{0}} $$
+For example, let's compare a player with 300 hits in 1000 at bats with a player with 4 hits in 10 at bats:
+
+$$ \frac{300 + 102}{300 + 102 + 700 + 290} = 0.289$$
+$$ \frac{4 + 102}{4 + 102 + 6 + 290} = 0.264$$
+
+Even though the player with 4 hits out of 10 technically has a better batting avg than the other, we guess that the 300/1000 batter is better. This is the empirical Bayes Estimate. We can save these values:
+
+```{r}
+career_eb <- career %>%
+mutate(eb_estimate = (H + alpha0) / (AB + alpha0 + beta0))
+
+career_eb
+```
+
+We can now observe and compare between their batting averages and their empirical Bayes estimate of their batting average, allowing us to gauge more into each players' true performances.
+
+Let's see how the empirical Bayes estimates changed all of the batting average estimates using a scatterplot:
+
+```{r}
+ggplot(career_eb, aes(average, eb_estimate, color = AB)) +
+  geom_hline(yintercept = alpha0 / (alpha0 + beta0), color = "red", lty = 2) +
+  geom_point() +
+  geom_abline(color = "red") +
+  scale_colour_gradient(trans = "log", breaks = 10 ^ (1:5)) +
+  xlab("Batting average") +
+  ylab("Empirical Bayes batting average")
+```
+The red dotted line represents the expected value with no evidence $\frac{\alpha_{0}}{\alpha_{0}+\beta_{0}} = 0.261$. The diagonal red line marks $x=y$, points that are close to this line, are ones that didn't get shrink much by empirical Bayes. These points are usually the ones with highest number of at-bats marked in brighter blue; they have enough evidence that we are willing to believe the naive batting avg estimate.
+
+In general, if we have very little evidence, the observation will more likely be shrunk more compared to observations with lots of evidence.
