@@ -1,0 +1,113 @@
+---
+title: "04-Credible Intervals"
+author: "Andrew L"
+date: "2/10/2022"
+output: html_document
+---
+
+* may want to know how much uncertainty is in our point estimate from our Bayes estimate
+
+# Setup
+
+Let's set up a table comparing each players' raw average and their point estimate averages:
+
+```{r, warning=F, message=F}
+library(dplyr)
+library(tidyr)
+library(Lahman)
+
+career <- Batting %>%
+  filter(AB > 0) %>%
+  anti_join(Pitching, by = "playerID") %>%
+  group_by(playerID) %>%
+  summarize(H = sum(H), AB = sum(AB)) %>%
+  mutate(average = H / AB)
+
+career <- Master %>%
+  tbl_df() %>%
+  dplyr::select(playerID, nameFirst, nameLast) %>%
+  unite(name, nameFirst, nameLast, sep = " ") %>%
+  inner_join(career, by = "playerID")
+
+# values estimated by maximum likelihood in Chapter 3
+alpha0 <- 101.4
+beta0 <- 287.3
+
+
+career_eb <- career %>%
+    mutate(eb_estimate = (H + alpha0) / (AB + alpha0 + beta0))
+```
+
+We are naturally more uncertain of players who have little info compared to players with lots of info, and so we want to calculate this uncertainty
+
+# Posterior Distribution
+
+With emprical Bayes estimation, we're really trying to compute two new values for each player: $\alpha_{1}$ and $\beta_{1}$. These are the _posterior_ shape parameters for each player's distribution, after the prior has been updated based on each player's evidence.$\alpha_{1} = \alpha_{0} + H$ and $\beta_{1} = \beta_{0} + AB - H$
+
+```{r}
+career_eb <- career_eb %>%
+  mutate(alpha1 = alpha0 + H,
+         beta1 = beta0 + AB - H)
+```
+
+We can visualize the density of the posterior disstribution for each player, using the dbeta function. Here are some examples of a few Yankee batters from the 1998 Yankees
+
+```{r}
+yankee_1998 <- c("brosisc01", "jeterde01", "knoblch01", "martiti02",
+                 "posadjo01", "strawda01", "willibe02")
+yankee_1998_career <- career_eb %>%
+  filter(playerID %in% yankee_1998)
+
+library(tidyr)
+library(ggplot2)
+
+yankee_beta <- yankee_1998_career %>%
+  crossing(x = seq(.18, .33, .0002)) %>%
+  ungroup() %>%
+  mutate(density = dbeta(x, alpha1, beta1))
+
+ggplot(yankee_beta, aes(x, density, color = name)) +
+  geom_line() +
+  stat_function(fun = function(x) dbeta(x, alpha0, beta0),
+                lty = 2, color = "black") +
+  labs(x = "Batting average",
+       color = "Player")
+```
+each of these curves is the probability distribution of what the player's batting avg could be after updating based on that player's performance, the point estimates that we calculated in Chapter 3 was simply the peak of each curve
+
+## Credible Intervals
+
+We can create credible intervals and say that some percentage (eg 95%) of the posterior distribution lies within that particular region. We can compute these intervals with qbeta function. We just need to provide the $\alpha_{1}$ and $beta_{1}$ parameters for each player:
+
+```{r}
+yankee_1998_career <- yankee_1998_career %>%
+  mutate(low  = qbeta(.025, alpha1, beta1),
+         high = qbeta(.975, alpha1, beta1))
+```
+
+```{r}
+yankee_1998_career %>%
+  dplyr::select(-alpha1, -beta1, -eb_estimate) %>%
+  knitr::kable()
+```
+
+These can be visuzlized in a plot with points and errorbars:
+
+```{r}
+yankee_1998_career %>%
+  mutate(name = reorder(name, eb_estimate)) %>%
+  ggplot(aes(eb_estimate, name)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = low, xmax = high)) +
+  geom_vline(xintercept = alpha0 / (alpha0 + beta0), color = "red", lty = 2) +
+  xlab("Estimated batting average (w/ 95% interval)") +
+  ylab("Player")
+```
+The dotted red line is $\frac{\alpha_{0}}{\alpha_{0}+\beta_{0}}$, the mean batting avg across history (based on our beta fit), that everything is being shrunk towards
+
+## Credible vs Confidence Intervals
+
+* the confidence intervals (frequentist) treat the true parameter as fixed while credible (Bayesian) treats it as a probability distribution
+ + credible interval takes prior info into account
+* credible and confidence interval will approximately be equal as there is more info (large $n$), and/or the prior is less informative (small $\alpha_{0}$, small $\beta_{0}$)
+ 
